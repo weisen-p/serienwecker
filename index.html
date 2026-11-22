@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<title>Serienwecker – Verbindungstest</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 0 auto; padding: 16px; color: #1a2330; background: #f4f6f9; }
+  h1 { font-size: 1.4em; color: #005aa0; margin-bottom: 4px; }
+  .klein { color: #667; font-size: .9em; }
+  button { font-size: 1em; padding: 10px 16px; margin: 6px 6px 6px 0; border: 0; border-radius: 8px; background: #005aa0; color: #fff; cursor: pointer; }
+  button.grau { background: #dde3ea; color: #1a2330; }
+  .zeile { background: #fff; border-radius: 8px; padding: 10px 12px; margin: 8px 0; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .ok { border-left: 5px solid #2e9e5b; } .fehler { border-left: 5px solid #d64545; } .info { border-left: 5px solid #8a97a8; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: .85em; background: #eef2f6; padding: 8px; border-radius: 6px; max-height: 260px; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>Serienwecker – Verbindungstest</h1>
+<p class="klein">Prüft, welche pCloud-Zugriffe aus einer Webseite heraus funktionieren. Liest nur – außer du tippst ausdrücklich auf „Schreibtest“.
+Das Zugangs-Token bleibt nur in diesem Browser-Tab (sessionStorage) und verschwindet beim Schließen.</p>
+<div id="knoepfe"></div>
+<div id="ausgabe"></div>
+<p class="klein">Zum Weitergeben: <button class="grau" onclick="kopieren()">Ergebnis kopieren</button> (enthält kein Token)</p>
+
+<script>
+"use strict";
+const CLIENT_ID = "VPDJ9lvk7S7";
+// SHA-256 der erlaubten pCloud-E-Mail-Adresse (klein geschrieben) – nur dieses Konto wird akzeptiert
+const ERLAUBT = "568dc904b2f48a68df2d463d5543b9e4fafe79fb46343f855a64124547fa1a92";
+const DATEI = "serienwecker.ini";
+const RUECKGABE = location.origin + location.pathname;
+const protokoll = [];
+
+function zeigen(art, titel, text) {
+  protokoll.push((art === "ok" ? "✓ " : art === "fehler" ? "✗ " : "• ") + titel + (text ? "\n" + text : ""));
+  const d = document.createElement("div");
+  d.className = "zeile " + art;
+  d.innerHTML = "<b></b>";
+  d.querySelector("b").textContent = (art === "ok" ? "✓ " : art === "fehler" ? "✗ " : "• ") + titel;
+  if (text) { const p = document.createElement("pre"); p.textContent = text; d.appendChild(p); }
+  document.getElementById("ausgabe").appendChild(d);
+}
+function kopieren() { navigator.clipboard.writeText(protokoll.join("\n\n")).then(() => alert("Kopiert")); }
+function knopf(t, f, grau) { const b = document.createElement("button"); b.textContent = t; b.onclick = f; if (grau) b.className = "grau"; document.getElementById("knoepfe").appendChild(b); }
+async function sha256(t) {
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
+  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function anmelden() {
+  const state = crypto.getRandomValues(new Uint32Array(4)).join("-");
+  sessionStorage.setItem("state", state);
+  location.href = "https://my.pcloud.com/oauth2/authorize?client_id=" + encodeURIComponent(CLIENT_ID) +
+    "&response_type=token&redirect_uri=" + encodeURIComponent(RUECKGABE) + "&state=" + encodeURIComponent(state);
+}
+function abmelden() { sessionStorage.clear(); location.replace(RUECKGABE); }
+
+function rueckgabeLesen() {
+  const roh = location.hash.length > 1 ? location.hash.slice(1) : location.search.slice(1);
+  if (!roh) return;
+  const p = new URLSearchParams(roh);
+  history.replaceState(null, "", RUECKGABE); // Token aus der Adresszeile entfernen
+  if (p.get("error")) { zeigen("fehler", "pCloud meldet: " + p.get("error")); return; }
+  if (!p.get("access_token")) return;
+  if (p.get("state") !== sessionStorage.getItem("state")) { zeigen("fehler", "Anmeldung passt nicht zur Anfrage (state)"); return; }
+  let host = (p.get("hostname") || "").toLowerCase();
+  if (!host) host = p.get("locationid") === "2" ? "eapi.pcloud.com" : "api.pcloud.com";
+  if (!/^[a-z0-9.-]+\.pcloud\.com$/.test(host)) { zeigen("fehler", "Unerwarteter Server: " + host); return; }
+  sessionStorage.setItem("token", p.get("access_token"));
+  sessionStorage.setItem("host", host);
+  sessionStorage.removeItem("state");
+}
+
+async function api(methode, param) {
+  const q = new URLSearchParams(Object.assign({}, param, { access_token: sessionStorage.getItem("token") }));
+  const r = await fetch("https://" + sessionStorage.getItem("host") + "/" + methode + "?" + q, { referrerPolicy: "no-referrer" });
+  const j = await r.json();
+  if (j.result !== 0) throw new Error("pCloud-Fehler " + j.result + ": " + (j.error || ""));
+  return j;
+}
+function fehlerText(e) { return (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : String(e)); }
+
+async function testen() {
+  document.getElementById("ausgabe").innerHTML = ""; protokoll.length = 0;
+  zeigen("info", "Seite: " + RUECKGABE + " · Server: " + sessionStorage.getItem("host"), navigator.userAgent);
+  // 1. Konto
+  try {
+    const u = await api("userinfo");
+    const ok = (await sha256((u.email || "").trim().toLowerCase())) === ERLAUBT;
+    if (!ok) { zeigen("fehler", "Dieses pCloud-Konto ist für den Serienwecker nicht freigegeben."); abmelden(); return; }
+    zeigen("ok", "1. Konto gelesen und freigegeben");
+  } catch (e) { zeigen("fehler", "1. Konto lesen (userinfo)", fehlerText(e)); return; }
+  // 2. Ordner
+  let datei = null;
+  try {
+    const l = await api("listfolder", { folderid: 0 });
+    const inhalt = (l.metadata.contents || []).map(e => (e.isfolder ? "📁 " : "📄 ") + e.name + (e.isfolder ? "" : "  (" + e.size + " Bytes, " + e.modified + ")"));
+    datei = (l.metadata.contents || []).find(e => !e.isfolder && e.name === DATEI) || null;
+    zeigen("ok", "2. Ordner gelesen: „" + l.metadata.name + "“", inhalt.join("\n") || "(leer)");
+    if (!datei) { zeigen("fehler", "   " + DATEI + " nicht gefunden"); }
+  } catch (e) { zeigen("fehler", "2. Ordner lesen (listfolder)", fehlerText(e)); return; }
+  if (!datei) return;
+  // 3. Herunterladen auf drei Wegen
+  let text = null;
+  try {
+    const l = await api("getfilelink", { fileid: datei.fileid });
+    const r = await fetch("https://" + l.hosts[0] + l.path, { referrerPolicy: "no-referrer" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    text = await r.text();
+    zeigen("ok", "3a. Download über getfilelink", text.slice(0, 300) + (text.length > 300 ? " …" : ""));
+  } catch (e) { zeigen("fehler", "3a. Download über getfilelink", fehlerText(e)); }
+  try {
+    const q = new URLSearchParams({ fileid: datei.fileid, access_token: sessionStorage.getItem("token"), contenttype: "text/plain" });
+    const r = await fetch("https://" + sessionStorage.getItem("host") + "/gettextfile?" + q, { referrerPolicy: "no-referrer" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.text();
+    if (t.trim().startsWith("{") && t.includes('"result"')) throw new Error(t.slice(0, 200));
+    zeigen("ok", "3b. Download über gettextfile (" + t.length + " Zeichen)");
+    text = text || t;
+  } catch (e) { zeigen("fehler", "3b. Download über gettextfile", fehlerText(e)); }
+  try {
+    const l = await api("getfilelink", { fileid: datei.fileid, forcedownload: 1 });
+    const r = await fetch("https://" + l.hosts[l.hosts.length > 1 ? 1 : 0] + l.path, { referrerPolicy: "no-referrer", mode: "cors", credentials: "omit" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.text();
+    zeigen("ok", "3c. Download über getfilelink (zweiter Server, forcedownload) – " + t.length + " Zeichen");
+    text = text || t;
+  } catch (e) { zeigen("fehler", "3c. Download über getfilelink (zweiter Server)", fehlerText(e)); }
+  if (text) {
+    const w = (text.match(/^\s*\[Wecker \d+\]/gm) || []).length, j = (text.match(/^\s*\[Jahrestag \d+\]/gm) || []).length;
+    zeigen("ok", text.startsWith("SERIENWECKER-VERSCHLUESSELT") ? "Inhalt: verschlüsselt" : "Inhalt: " + w + " Wecker, " + j + " Jahrestage");
+  }
+}
+
+async function schreibtest() {
+  if (!confirm("Schreibtest: legt im Serienwecker-Ordner die Datei „webtest.txt“ an. Deine serienwecker.ini bleibt unberührt. Fortfahren?")) return;
+  try {
+    const fd = new FormData();
+    fd.append("file", new Blob(["Schreibtest der Weboberfläche am " + new Date().toISOString()], { type: "text/plain" }), "webtest.txt");
+    const q = new URLSearchParams({ folderid: 0, filename: "webtest.txt", nopartial: 1, access_token: sessionStorage.getItem("token") });
+    const r = await fetch("https://" + sessionStorage.getItem("host") + "/uploadfile?" + q, { method: "POST", body: fd, referrerPolicy: "no-referrer" });
+    const j = await r.json();
+    if (j.result !== 0) throw new Error("pCloud-Fehler " + j.result + ": " + (j.error || ""));
+    zeigen("ok", "4. Schreibtest: webtest.txt angelegt (darf gelöscht werden)");
+  } catch (e) { zeigen("fehler", "4. Schreibtest (uploadfile)", fehlerText(e)); }
+}
+
+rueckgabeLesen();
+if (sessionStorage.getItem("token")) {
+  knopf("Test starten", testen);
+  knopf("Schreibtest", schreibtest, true);
+  knopf("Abmelden", abmelden, true);
+  testen();
+} else {
+  knopf("Mit pCloud anmelden", anmelden);
+}
+</script>
+</body>
+</html>
