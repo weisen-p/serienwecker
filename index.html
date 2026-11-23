@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow, noarchive">
 <meta name="referrer" content="no-referrer">
-<title>Serienwecker – Verbindungstest</title>
+<title>Serienwecker – Verbindungstest 2</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 760px; margin: 0 auto; padding: 16px; color: #1a2330; background: #f4f6f9; }
   h1 { font-size: 1.4em; color: #005aa0; margin-bottom: 4px; }
@@ -18,7 +18,7 @@
 </style>
 </head>
 <body>
-<h1>Serienwecker – Verbindungstest</h1>
+<h1>Serienwecker – Verbindungstest 2</h1>
 <p class="klein">Prüft, welche pCloud-Zugriffe aus einer Webseite heraus funktionieren. Liest nur – außer du tippst ausdrücklich auf „Schreibtest“.
 Das Zugangs-Token bleibt nur in diesem Browser-Tab (sessionStorage) und verschwindet beim Schließen.</p>
 <div id="knoepfe"></div>
@@ -129,6 +129,25 @@ async function testen() {
     zeigen("ok", "3c. Download über getfilelink (zweiter Server, forcedownload) – " + t.length + " Zeichen");
     text = text || t;
   } catch (e) { zeigen("fehler", "3c. Download über getfilelink (zweiter Server)", fehlerText(e)); }
+  try {
+    const q = new URLSearchParams({ fileid: datei.fileid, contenttype: "text/plain" });
+    const r = await fetch("https://" + sessionStorage.getItem("host") + "/gettextfile?" + q,
+      { referrerPolicy: "no-referrer", headers: { "Authorization": "Bearer " + sessionStorage.getItem("token") } });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.text();
+    if (t.trim().startsWith("{") && t.includes('"result"')) throw new Error(t.slice(0, 200));
+    zeigen("ok", "3d. Download über gettextfile mit Token im Kopf (" + t.length + " Zeichen)", t.slice(0, 300));
+    text = text || t;
+  } catch (e) { zeigen("fehler", "3d. Download über gettextfile mit Token im Kopf", fehlerText(e)); }
+  try {
+    const q = new URLSearchParams({ fileid: datei.fileid, auth: sessionStorage.getItem("token"), contenttype: "text/plain" });
+    const r = await fetch("https://" + sessionStorage.getItem("host") + "/gettextfile?" + q, { referrerPolicy: "no-referrer" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.text();
+    if (t.trim().startsWith("{") && t.includes('"result"')) throw new Error(t.slice(0, 200));
+    zeigen("ok", "3e. Download über gettextfile mit Parameter auth (" + t.length + " Zeichen)", t.slice(0, 300));
+    text = text || t;
+  } catch (e) { zeigen("fehler", "3e. Download über gettextfile mit Parameter auth", fehlerText(e)); }
   if (text) {
     const w = (text.match(/^\s*\[Wecker \d+\]/gm) || []).length, j = (text.match(/^\s*\[Jahrestag \d+\]/gm) || []).length;
     zeigen("ok", text.startsWith("SERIENWECKER-VERSCHLUESSELT") ? "Inhalt: verschlüsselt" : "Inhalt: " + w + " Wecker, " + j + " Jahrestage");
